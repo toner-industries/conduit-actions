@@ -10,7 +10,7 @@ inputs:
   worker_url:
     description: Prompt service base URL
     required: false
-    default: https://conduit-prompts.toner-industries.workers.dev
+    default: https://conduit-prompts.mech-briefs.workers.dev
 outputs:
   prompt_file:
     description: Absolute path to the role's main prompt file
