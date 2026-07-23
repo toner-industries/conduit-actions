@@ -1,0 +1,70 @@
+name: conduit-prompt-relay
+description: >-
+  Fetches a Toner-managed role prompt bundle over GitHub OIDC and stages it
+  outside the workspace. Contains no prompt content; see README for the
+  exposure model.
+inputs:
+  role:
+    description: Role bundle to fetch (e.g. pr-review)
+    required: true
+  worker_url:
+    description: Prompt service base URL
+    required: false
+    default: https://conduit-prompts.toner-industries.workers.dev
+outputs:
+  prompt_file:
+    description: Absolute path to the role's main prompt file
+    value: ${{ steps.stage.outputs.prompt_file }}
+  prompt_dir:
+    description: Absolute path to the staged bundle directory
+    value: ${{ steps.stage.outputs.prompt_dir }}
+  bundle_version:
+    description: Version stamp of the served bundle
+    value: ${{ steps.stage.outputs.bundle_version }}
+runs:
+  using: composite
+  steps:
+    - name: mint OIDC token
+      id: oidc
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const token = await core.getIDToken('conduit-prompts');
+          core.setSecret(token);
+          core.setOutput('token', token);
+    - name: fetch + stage bundle
+      id: stage
+      shell: bash
+      env:
+        OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        ROLE: ${{ inputs.role }}
+        WORKER_URL: ${{ inputs.worker_url }}
+      run: |
+        set -euo pipefail
+        dir="$RUNNER_TEMP/conduit-prompts"
+        mkdir -p "$dir"
+        http_code=$(curl -sS -o "$dir/bundle.json" -w '%{http_code}' \
+          -X POST "$WORKER_URL/bundle" \
+          -H "authorization: Bearer $OIDC_TOKEN" \
+          -H 'content-type: application/json' \
+          --data "{\"role\":\"$ROLE\"}")
+        if [ "$http_code" != "200" ]; then
+          echo "::error title=prompt-relay::bundle fetch failed (HTTP $http_code) for role '$ROLE' — failing loudly; no review/agent run happened."
+          exit 1
+        fi
+        python3 - "$dir" <<'PY'
+        import json, os, sys
+        d = sys.argv[1]
+        b = json.load(open(os.path.join(d, 'bundle.json')))
+        for name, content in b['files'].items():
+            safe = os.path.basename(name)
+            with open(os.path.join(d, safe), 'w') as f:
+                f.write(content)
+        out = os.environ['GITHUB_OUTPUT']
+        with open(out, 'a') as f:
+            f.write(f"prompt_file={os.path.join(d, os.path.basename(b['prompt_file']))}\n")
+            f.write(f"prompt_dir={d}\n")
+            f.write(f"bundle_version={b.get('version','unversioned')}\n")
+        PY
+        rm -f "$dir/bundle.json"
+        echo "::notice title=prompt-relay::role=$ROLE staged ($(ls "$dir" | wc -l | tr -d ' ') files)"

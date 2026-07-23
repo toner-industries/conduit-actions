@@ -1,0 +1,24 @@
+name: relay-smoke
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: relay fetch (smoke role)
+        id: relay
+        uses: ./actions/prompt-relay
+        with:
+          role: smoke
+      - name: assert staged without printing
+        run: |
+          f="${{ steps.relay.outputs.prompt_file }}"
+          [ -s "$f" ] || { echo "::error::staged prompt file missing/empty"; exit 1; }
+          echo "smoke ok: $(wc -c < "$f" | tr -d ' ') bytes, version ${{ steps.relay.outputs.bundle_version }}"
+      - name: cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/conduit-prompts"

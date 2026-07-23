@@ -1,0 +1,256 @@
+# role-pr-review — reusable workflow: every PR gets a Claude review before the
+# human (CE-292, CE-302). Called by client repos via workflow_call; house-layer
+# role prompts (pr-reviewer.md, communication.md) are no longer committed to
+# the client repo — they are fetched at run time from the Toner-managed
+# prompt relay (toner-industries/conduit-actions/actions/prompt-relay) and
+# staged outside the checkout. See this repo's README for the exposure model.
+#
+# DESIGN, decided after a 5-round live self-test on PR #9 (CE-302):
+#
+# * The official code-review plugin is installed for its METHODOLOGY — the
+#   agent is instructed to read the plugin's command file from the plugin
+#   cache and execute it (parallel reviewers, confidence rubric, severity
+#   filtering). The plugin's slash command is NOT invoked: under
+#   track_progress:true the action places `prompt:` inside
+#   <custom_instructions>, where slash-command detection never runs (action
+#   source, root-caused round 4). Methodology-by-instruction is therefore
+#   the deliberate design, not a fallback.
+# * security-guidance is NOT loaded here: its hook layers cannot fire in a
+#   read-only review session (round-3 finding). It belongs in the dev
+#   workflows (CE-293/296), which write code.
+# * Marketplace pinning: the action has no ref-pinning syntax for
+#   marketplaces (source-verified round 4). ACCEPTED RISK, human gate
+#   informed: we track anthropics/claude-plugins-official@HEAD. If supply
+#   chain hardening becomes required, vendor the marketplace into the repo.
+#
+# THE FENCE, described honestly (round-4 lesson: removing --allowedTools
+# does NOT widen access — the action substitutes its own tag-mode default
+# allowlist; an explicit allowlist is the only deterministic fence):
+# * Job token: contents:read — nothing in this job can push, ever.
+#   pull-requests:write permits comments, reviews, and labels (not just
+#   comments). actions:read feeds the action's CI-status MCP server.
+# * --allowedTools: explicit union of the harness read tools, the plugin's
+#   own declared frontmatter needs (gh pr/issue/search verbs incl. its
+#   gh pr comment posting path), quality-gate Bash, git inspection, the
+#   action's two comment MCP tools, and mcp__atlassian (the CE-291 Jira
+#   handoff seam — server key must be `atlassian` when .mcp.json lands).
+# * --disallowedTools: Edit/Write-class + web fetch/search. Belt over the
+#   token's suspenders for file writes; the exfiltration channel stays shut.
+#
+# Self-review guard: skips PRs authored by github-actions[bot] (the identity
+# this workflow posts with). Agent PRs come from mech-discovery[bot] — the
+# allowed_bots entry below is REQUIRED or the action errors on bot events.
+#
+# NOT a merge gate: findings inform the human code owner; the CODEOWNERS
+# gate decides. Failure of the Claude session itself IS a job failure
+# (CE-299 guard) — a red pr-review check means "no review happened".
+#
+# Model: tiered by the review-depth step — fable-5 (full) / sonnet-5
+# (light). Fallback for either: claude-opus-4-8.
+name: role-pr-review
+
+on:
+  workflow_call:
+    secrets:
+      anthropic_api_key:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read # the action's github_ci MCP server reads CI status for review context
+  id-token: write # relay OIDC only — unrelated to the action's own github_token (CE-299)
+
+jobs:
+  review:
+    name: pr-review
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.user.login != 'github-actions[bot]'
+    steps:
+      - name: preflight — no-op until anthropic_api_key is wired at the caller
+        id: preflight
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.anthropic_api_key }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=pr-review skipped::anthropic_api_key secret was not passed by the caller's workflow_call stub — wire it to activate the PR review agent (CE-292)."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.preflight.outputs.has_key == 'true'
+        with:
+          fetch-depth: 0
+
+      - name: assemble optional MCP args (Jira seam, CE-291)
+        id: mcp
+        if: steps.preflight.outputs.has_key == 'true'
+        run: |
+          if [ -f .mcp.json ]; then
+            echo "args=--mcp-config .mcp.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Review-depth tiering (cost control, Cody 2026-07-10): FULL runs the
+      # plugin methodology on fable-5 with parallel reviewers — reserved for
+      # newly-opened PRs that touch code paths (or a `review-full` label).
+      # LIGHT runs a single-pass sonnet-5 review — docs-only diffs, small
+      # diffs, and every synchronize push (delta-focused; the full review
+      # already happened at open). Expected: docs/infra PRs ~\$0.3-0.8,
+      # code PRs keep depth without re-billing it on every push.
+      - name: review depth
+        id: depth
+        if: steps.preflight.outputs.has_key == 'true'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          FORCE_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'review-full') }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: |
+          git fetch -q origin "$BASE" || true
+          files=$(git diff --name-only "$BASE"...HEAD | wc -l | tr -d ' ')
+          lines=$(git diff --shortstat "$BASE"...HEAD | grep -oE '[0-9]+ insertion|[0-9]+ deletion' | grep -oE '[0-9]+' | paste -sd+ - | bc || echo 0)
+          code_touched=$(git diff --name-only "$BASE"...HEAD | grep -cE '^(apps/|prisma/|smithy/|tools/|requirements/schema)' || true)
+          # security-event paths (the gates themselves) ALWAYS get full depth,
+          # on every event — found by the light reviewer reviewing the commit
+          # that under-scrutinized it (round 8 finding 1).
+          sec_touched=$(git diff --name-only "$BASE"...HEAD | grep -cE '^(\.github/workflows/|\.github/CODEOWNERS)' || true)
+          if [ "$sec_touched" -gt 0 ] || [ "$FORCE_FULL" = "true" ]; then mode=full
+          elif [ "$EVENT_ACTION" = "synchronize" ]; then mode=light
+          elif [ "$code_touched" -gt 0 ] && [ "${lines:-0}" -gt 40 ]; then mode=full
+          else mode=light; fi
+          if [ "$mode" = "full" ]; then
+            echo "mode=full"  >> "$GITHUB_OUTPUT"
+            echo "model=claude-fable-5" >> "$GITHUB_OUTPUT"
+            echo "turns=30" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=light" >> "$GITHUB_OUTPUT"
+            echo "model=claude-sonnet-5" >> "$GITHUB_OUTPUT"
+            echo "turns=12" >> "$GITHUB_OUTPUT"
+          fi
+          echo "::notice title=pr-review depth::mode=$mode files=$files lines=${lines:-0} code_touched=$code_touched action=$EVENT_ACTION"
+
+      - name: fetch role prompts (Toner relay)
+        id: relay
+        if: steps.preflight.outputs.has_key == 'true'
+        uses: toner-industries/conduit-actions/actions/prompt-relay@v1
+        with:
+          role: pr-review
+
+      # track_progress pre-creates the tracking comment that
+      # update_claude_comment edits. The PR title below is untrusted text
+      # entering the prompt; the reviewer reads PR content by definition and
+      # the token + tool fences bound what injected text can do.
+      - name: claude review
+        id: claude
+        if: steps.preflight.outputs.has_key == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.anthropic_api_key }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          plugin_marketplaces: 'https://github.com/anthropics/claude-plugins-official.git'
+          plugins: |
+            code-review@claude-plugins-official
+          allowed_bots: 'mech-discovery[bot]'
+          track_progress: true
+          prompt: |
+            Review PR #${{ github.event.pull_request.number }}
+            (branch ${{ github.event.pull_request.head.ref }} into
+            ${{ github.event.pull_request.base.ref }},
+            author ${{ github.event.pull_request.user.login }};
+            PR title: ${{ github.event.pull_request.title }}).
+
+            Review depth for THIS run: ${{ steps.depth.outputs.mode }}.
+            - full: execute the complete methodology below, parallel
+              reviewers included.
+            - light: SINGLE PASS — do not spawn Task subagents, skip the
+              plugin's parallel fan-out, cap your reading to the diff and
+              directly-touched files. On a synchronize event, review the
+              DELTA since the previous review comment rather than the whole
+              PR; standing findings need one-line re-verify at most. The
+              completion contract still applies in full.
+
+            Methodology: the code-review plugin is installed in the plugin
+            cache. Read its command file (commands/code-review.md under the
+            code-review plugin directory) and EXECUTE its methodology —
+            parallel reviewer perspectives, its confidence rubric with the
+            >=80 posting bar (findings below the bar may be included only
+            with the score stated), its dedup/verification pass. REVIEW.md
+            at the repo root configures it for this repository (severity
+            mapping, skip paths, repo-specific checks) — read it and comply.
+
+            House layers, mandatory on top: ${{ steps.relay.outputs.prompt_dir }}/pr-reviewer.md
+            (requirements-graph traceability both directions, house
+            constraints, the Jira handoff, proposed lessons) and
+            ${{ steps.relay.outputs.prompt_dir }}/communication.md (5W1H, verdict-first — governs
+            every comment you write).
+
+            The house-layer files live outside the repository checkout; read
+            them at the absolute paths given above.
+
+            Channel routing: line-anchored findings via
+            mcp__github_inline_comment__create_inline_comment; the summary
+            via mcp__github_comment__update_claude_comment; do NOT use
+            gh pr comment for review output (it is allowed for the plugin's
+            read protocols, not as a third posting path).
+
+            COMPLETION CONTRACT (two consecutive runs ended early — this is
+            the fix): your session is complete ONLY when the tracking
+            comment has been updated with the final review — a "### Verdict"
+            line, the findings, and NO unchecked todo items. Spawning
+            parallel reviewers does not discharge the work: you must
+            collect their results and synthesize BEFORE ending. Budget your
+            turns for synthesis: when roughly three quarters of your turn budget is spent and reviewers
+            have not returned, stop waiting, write the summary from what
+            you have, and say which perspectives are missing. An unposted
+            review is a failed review; the workflow's completion guard will
+            fail the job if the Verdict line is absent.
+          claude_args: |
+            --model ${{ steps.depth.outputs.model }}
+            --max-turns ${{ steps.depth.outputs.turns }}
+            ${{ steps.mcp.outputs.args }}
+            --allowedTools "Read,Grep,Glob,Task,Bash(npm ci),Bash(npm run lint),Bash(npm run typecheck),Bash(npm test),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),mcp__github_comment__update_claude_comment,mcp__github_inline_comment__create_inline_comment,mcp__atlassian"
+            --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch"
+
+      - name: run cost (CE-292 acceptance — cost visible in the log)
+        if: always() && steps.claude.outputs.execution_file != ''
+        run: |
+          jq -r '.[] | select(.type == "result")
+                 | "claude review cost: $\(.total_cost_usd // "?") · \(.num_turns // "?") turns · \((.duration_ms // 0) / 1000 | floor)s"' \
+            "${{ steps.claude.outputs.execution_file }}" \
+            || echo "::warning::could not parse cost from the execution file"
+
+      # Round-6 guard: two runs ended "success" with the review unposted
+      # (subagents spawned, session concluded before synthesis). A review
+      # without a Verdict line in the tracking comment did not happen —
+      # fail the job so it cannot pass silently.
+      - name: fail on incomplete review (round-6 completion guard)
+        if: always() && steps.claude.outputs.execution_file != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          body=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"             --jq '[.[] | select(.user.login == "github-actions[bot]")] | last | .body // ""')
+          if ! printf '%s' "$body" | grep -q "### Verdict"; then
+            echo "::error title=pr-review incomplete::The Claude session ended without posting its final summary (no Verdict line in the tracking comment). The review did not complete; failing so this cannot pass silently."
+            exit 1
+          fi
+
+      # CE-299 finding #2: the action can "succeed" while the Claude session
+      # itself errored (is_error: true — e.g. dead API key or empty credit
+      # balance). Fail loudly: a red pr-review check is a true statement
+      # that no review happened.
+      - name: fail on silent review error (CE-299 guard)
+        if: always() && steps.claude.outputs.execution_file != ''
+        run: |
+          is_error=$(jq -r '.[] | select(.type == "result") | .is_error // false' \
+            "${{ steps.claude.outputs.execution_file }}")
+          if [ "$is_error" = "true" ]; then
+            echo "::error title=pr-review did not run::Claude session errored (is_error=true) — likely API key auth/credits or model access. No review was produced; failing so this cannot pass silently."
+            exit 1
+          fi
+
+      - name: cleanup staged prompts
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/conduit-prompts"
