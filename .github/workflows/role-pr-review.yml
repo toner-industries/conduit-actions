@@ -175,6 +175,16 @@ jobs:
               PR; standing findings need one-line re-verify at most. The
               completion contract still applies in full.
 
+            CROSS-REPO LIMITS — the harness workflow and action this repo
+            invokes live in another repository. You CANNOT fetch their
+            content (no WebFetch/WebSearch; gh api to other repos is not
+            in your tool allowlist). When a claim depends on another
+            repo's content at a SHA, record it as "human-verifiable at
+            the pinned SHA" and MOVE ON — do not spend turns attempting
+            denied tools; every denial burns budget you need for
+            synthesis. The Verdict summary is the deliverable: posting it
+            outranks any additional verification.
+
             Methodology: the code-review plugin is installed in the plugin
             cache. Read its command file (commands/code-review.md under the
             code-review plugin directory) and EXECUTE its methodology —
@@ -224,6 +234,58 @@ jobs:
                  | "claude review cost: $\(.total_cost_usd // "?") · \(.num_turns // "?") turns · \((.duration_ms // 0) / 1000 | floor)s"' \
             "${{ steps.claude.outputs.execution_file }}" \
             || echo "::warning::could not parse cost from the execution file"
+
+      # CE-314 — synthesis recovery: full-tier sessions sometimes end without
+      # posting the Verdict (turn exhaustion or premature completion). Instead
+      # of a guaranteed red run, detect the missing Verdict and run ONE bounded
+      # cheap synthesis pass that writes the summary from the review work
+      # already posted. The completion guard below still runs afterward and
+      # fails red if even recovery could not produce a Verdict.
+      - name: detect missing Verdict (CE-314)
+        id: verdict_check
+        if: always() && steps.claude.outputs.execution_file != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          body=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]")] | last | .body // ""')
+          is_error=$(jq -r '.[] | select(.type == "result") | .is_error // false' \
+            "${{ steps.claude.outputs.execution_file }}")
+          if printf '%s' "$body" | grep -q "### Verdict"; then
+            echo "needs_recovery=false" >> "$GITHUB_OUTPUT"
+          elif [ "$is_error" = "true" ]; then
+            echo "needs_recovery=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_recovery=true" >> "$GITHUB_OUTPUT"
+            echo "::warning title=pr-review synthesis recovery::Session ended without a Verdict — running a bounded synthesis pass (CE-314)."
+          fi
+
+      - name: synthesis recovery pass (CE-314)
+        if: always() && steps.verdict_check.outputs.needs_recovery == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.anthropic_api_key }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          track_progress: true
+          prompt: |
+            SYNTHESIS RECOVERY for PR #${{ github.event.pull_request.number }}: a
+            prior review session completed its review work (inline comments and
+            a progress checklist exist on this PR from github-actions[bot]) but
+            ended WITHOUT posting the final summary. Do NOT re-review the code.
+            Read the PR's existing review comments (gh pr view --comments, gh
+            api for the inline review comments) and the diff summary (gh pr
+            diff --stat), then compose and post the final summary via
+            mcp__github_comment__update_claude_comment: a "### Verdict" line
+            with severity counts, the findings condensed from the existing
+            inline comments, and any explicitly-unverified items noted as
+            human-verifiable. If the prior session posted no findings at all,
+            state that the review work is unrecoverable and a fresh run is
+            required — still under a "### Verdict" heading marked INCOMPLETE.
+          claude_args: |
+            --model claude-sonnet-5
+            --max-turns 10
+            --allowedTools "Read,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),mcp__github_comment__update_claude_comment"
+            --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task"
 
       # Round-6 guard: two runs ended "success" with the review unposted
       # (subagents spawned, session concluded before synthesis). A review
