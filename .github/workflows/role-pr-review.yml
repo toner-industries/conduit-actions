@@ -135,7 +135,10 @@ jobs:
       - name: fetch role prompts (Toner relay)
         id: relay
         if: steps.preflight.outputs.has_key == 'true'
-        uses: toner-industries/conduit-actions/actions/prompt-relay@v1
+        # SHA-pinned (not @v1): callers pin THIS workflow by commit SHA, so the
+        # action ref inside it must be immutable too or the pin is theater.
+        # Bumps: update this SHA in a reviewed commit, then callers bump theirs.
+        uses: toner-industries/conduit-actions/actions/prompt-relay@6dbdaabc6f7373ec6797da07627f3cd929833a81
         with:
           role: pr-review
 
