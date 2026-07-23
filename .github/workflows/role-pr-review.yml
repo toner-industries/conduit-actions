@@ -266,6 +266,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.anthropic_api_key }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: 'mech-discovery[bot]'
           track_progress: true
           prompt: |
             SYNTHESIS RECOVERY for PR #${{ github.event.pull_request.number }}: a
