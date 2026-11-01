@@ -119,6 +119,12 @@ verdict is used. When they all say helped the memory scores 1.0, when they all
 say wrong it scores 0.0; not sure, or reviewers who disagree, leave it to the
 judge, and the scores comment names who decided or who disagreed.
 
+Without a verdict line, Claude judges the memory from the "Memories used" row, the
+diff, and every comment and review. An inline review comment reaches the judge with
+the code it is attached to, so an objection or approval aimed at a decision a memory's
+row says it decided counts as that reviewer's view of the memory, even when the
+comment never names it.
+
 ## Exposure model, stated honestly
 
 Prompts are kept out of client repo contents, workflow logs, and build

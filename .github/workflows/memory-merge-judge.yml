@@ -142,8 +142,12 @@ jobs:
               --jq '.[] | "COMMENT by \(.user.login) (\(.user.type)):\n\(.body)\n"'
             gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" \
               --jq '.[] | select(.body != "") | "REVIEW \(.state) by \(.user.login) (\(.user.type)):\n\(.body)\n"'
+            # The code the comment is attached to (diff_hunk), capped to its last 40 lines, so the
+            # judge can tie a comment to the memory whose "decided" matches that code even when the
+            # comment never names the memory. .[] on an empty page prints nothing, so an empty list
+            # of inline comments never fails this step.
             gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/comments" \
-              --jq '.[] | "REVIEW COMMENT by \(.user.login) (\(.user.type)) on \(.path), reply to \(.in_reply_to_id // "none") (id \(.id)):\n\(.body)\n"'
+              --jq '.[] | "REVIEW COMMENT by \(.user.login) (\(.user.type)) on \(.path) line \(.line // .original_line // "unknown"), reply to \(.in_reply_to_id // "none") (id \(.id)):\nCODE:\n\((.diff_hunk // "") | split("\n") | .[-40:] | join("\n"))\n---\n\(.body)\n"'
           } > "$WORK_DIR/reviews.txt"
 
       - name: settle memories reviewers' verdict comments decide and prepare the rest for the judge
@@ -180,9 +184,13 @@ jobs:
             - title ${{ env.WORK_DIR }}/pr-title.txt and description ${{ env.WORK_DIR }}/pr-body.md;
             - every comment and review with its author in ${{ env.WORK_DIR }}/reviews.txt. A human's
               comment that names a memory (by its id, or plainly by what it says) counts most: follow it
-              unless the final diff contradicts it. A comment by the author or a bot is never a
-              reviewer's verdict. A decision a reviewer had changed because the memory was wrong means
-              the memory was wrong;
+              unless the final diff contradicts it. An inline review comment also carries the code it is
+              attached to, after CODE:. A human's objection or approval aimed at a decision listed in a
+              memory's "decided" counts as that reviewer's view of the memory that drove it, even when
+              the comment never names the memory: judge this by the comment's text together with that
+              code, and follow it unless the final diff contradicts it. A comment by the author or a bot
+              is never a reviewer's verdict. A decision a reviewer had changed because the memory was
+              wrong means the memory was wrong;
             - the final diff ${{ env.WORK_DIR }}/pr.diff.
 
             Score each memory with this rubric:
