@@ -47,7 +47,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: toner-industries/conduit-actions
-          ref: 0e9692c48e208b8c5ef4ea66f1e981188e5fedad
+          ref: 9213ba8f2b67b053ad7b28487ddacf034b9eb7b2
           path: .conduit-actions
           sparse-checkout: memory-citations
 

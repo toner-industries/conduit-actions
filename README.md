@@ -21,9 +21,10 @@ token.
   repository's own memory store. If the memory engine cannot be asked, it
   fails as "could not verify"; re-run it.
 - `.github/workflows/memory-merge-judge.yml`: a reusable workflow that, when a
-  pull request merges, scores each cited memory (a reviewer's Helped or Wrong
-  tick decides; otherwise Claude judges from the decision, the comments and
-  the diff), sends the scores as review outcomes, comments them on the pull
+  pull request merges, scores each cited memory (a Helped or Wrong tick
+  decides when someone other than the author, and not a bot, set it, as the
+  description's edit history shows; otherwise Claude judges from the decision,
+  the comments and the diff), sends the scores as review outcomes, comments them on the pull
   request, and mines the pull request into new memories.
 - `memory-citations/`: the scripts both workflows run, with their tests
   (`node --test memory-citations/test/`, no network).
@@ -89,7 +90,8 @@ The pull request template section the check reads:
 
 <!-- Paste the output of `recall.py cite` (mech-memory plugin), fill in "What it decided"
 for every row and remove rows that did not drive a decision. If no memory drove a
-decision, replace the table with exactly: No memories used. -->
+decision, replace the table with exactly: No memories used. A Helped or Wrong tick decides a
+memory's score only when someone other than the author, and not a bot, set it. -->
 
 | Memory | What it says | What it decided | Reviewer |
 |---|---|---|---|
