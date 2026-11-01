@@ -9,29 +9,35 @@ import { readPullRequest } from './lib/pull-request.mjs';
 import { resolveCitations } from './lib/resolve.mjs';
 import { NO_MEMORIES_USED, readSection, searchIdsIn } from './lib/section.mjs';
 
+const NOTHING_TO_CHECK = 'Memories used: the description says no memories were used, so there was nothing to check.';
 const MISSING_SECTION = `The description has no "## Memories used" section. Paste the output of recall.py cite, or add the heading followed by exactly "${NO_MEMORIES_USED}"`;
 
 export async function checkCitations({ description, commitMessages, engine }) {
   const section = readSection(description);
-  if (section.state === 'missing') return verdict([MISSING_SECTION]);
-  if (section.problems.length > 0) return verdict(section.problems);
-  if (section.state === 'none') return verdict([]);
+  if (section.state === 'missing') return failed([MISSING_SECTION]);
+  if (section.problems.length > 0) return failed(section.problems);
+  if (section.state === 'none') return passed(NOTHING_TO_CHECK);
   const searchIds = searchIdsIn([description, ...commitMessages]);
-  const { failures } = await resolveCitations({ rows: section.rows, searchIds, engine });
-  return verdict(failures.map((failure) => failure.message));
+  const { citations, failures } = await resolveCitations({ rows: section.rows, searchIds, engine });
+  if (failures.length > 0) return failed(failures.map((failure) => failure.message));
+  return passed(`Memories used: all ${citations.length} cited memories are in this repository's memory store.`);
 }
 
-function verdict(failures) {
-  return { passed: failures.length === 0, failures };
+function failed(failures) {
+  return { passed: false, failures, summary: `Memories used: ${failures.length} to fix.` };
+}
+
+function passed(summary) {
+  return { passed: true, failures: [], summary };
 }
 
 async function main() {
   const { description, commitMessages } = readPullRequest(process.env.PR_FILE);
   const engine = createEngine({ url: process.env.MEMORY_ENGINE_URL, key: process.env.MEMORY_API_KEY });
-  const { passed, failures } = await checkCitations({ description, commitMessages, engine });
-  for (const failure of failures) console.log(`::error title=Memories used::${failure}`);
-  if (passed) console.log('Memories used: every citation checked out.');
-  process.exit(passed ? 0 : 1);
+  const result = await checkCitations({ description, commitMessages, engine });
+  for (const failure of result.failures) console.log(`::error title=Memories used::${failure}`);
+  console.log(result.summary);
+  process.exit(result.passed ? 0 : 1);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

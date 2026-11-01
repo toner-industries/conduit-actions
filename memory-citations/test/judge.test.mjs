@@ -145,3 +145,16 @@ test('a cited memory missing from the store is reported and skipped', async () =
 test('an unreachable engine stops the job so it can be re-run', async () => {
   await assert.rejects(prepared(DESCRIPTION, { status: { [`/v1/retrievals/${FIRST_SEARCH}`]: 'unreachable' } }), /could not be reached/);
 });
+
+test('a problem with the section is a note, not a memory left unscored', async () => {
+  const text = DESCRIPTION.replace('decided cccccccc', '(fill in)');
+  const { prepared: p, engine } = await prepared(text);
+  const done = await finishJudging({ prepared: p, judged: { scores: [] }, engine });
+  assert.match(done.comment, /Notes on the section:\n- Memories used, row 3/);
+});
+
+test('a memory skipped for a lasting reason is listed as not scored', async () => {
+  const { prepared: p, engine } = await prepared(DESCRIPTION, { memories: [HELPED, UNSURE] });
+  const done = await finishJudging({ prepared: p, judged: { scores: [] }, engine });
+  assert.match(done.comment, /Not scored:\n- Memories used: memory bbbbbbbb is not in this repository's memory store/);
+});

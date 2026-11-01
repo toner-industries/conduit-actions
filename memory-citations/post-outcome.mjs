@@ -74,11 +74,12 @@ function commentFor({ prepared, scored, unscored, refusedSearches }) {
     lines.push(`| \`${score.short}\` | ${refused ? 'not scored' : score.reward} | ${refused ? 'its search already had a review outcome' : score.reason} |`);
   }
   for (const memory of unscored) lines.push(`| \`${memory.short}\` | not scored | ${NO_EVIDENCE} |`);
-  const notes = [
+  const notScored = [
     ...refusedSearches.map((id) => `search ${id.slice(0, SHORT_ID)} already had a review outcome, so its memories were not scored again`),
     ...prepared.skipped,
   ];
-  if (notes.length > 0) lines.push('', 'Not scored:', ...notes.map((note) => `- ${note}`));
+  if (notScored.length > 0) lines.push('', 'Not scored:', ...notScored.map((note) => `- ${note}`));
+  if (prepared.sectionProblems.length > 0) lines.push('', 'Notes on the section:', ...prepared.sectionProblems.map((note) => `- ${note}`));
   return [...lines, ''].join('\n');
 }
 

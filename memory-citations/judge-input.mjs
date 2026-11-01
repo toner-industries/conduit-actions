@@ -34,11 +34,11 @@ export async function prepareJudging({ description, commitMessages, engine }) {
     if (row.verdict === null) toJudge.push({ ...cited, says: row.says, decided: row.decided, memory: memoryText(memory) });
     else decided.push({ ...cited, ...TICKED[row.verdict], by: 'reviewer' });
   }
-  return { note: null, decided, toJudge, skipped: [...section.problems, ...failures.map((failure) => failure.message)] };
+  return { note: null, decided, toJudge, skipped: failures.map((failure) => failure.message), sectionProblems: section.problems };
 }
 
 function nothingToScore(note) {
-  return { note, decided: [], toJudge: [], skipped: [] };
+  return { note, decided: [], toJudge: [], skipped: [], sectionProblems: [] };
 }
 
 /** Only the fields that say what the memory claims; the judge needs nothing else. */

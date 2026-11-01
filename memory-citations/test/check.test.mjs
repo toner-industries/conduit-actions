@@ -19,12 +19,12 @@ async function check(text, engineOptions = { searches: { [SEARCH]: [MEMORY] }, m
 }
 
 test('passes a filled-in row whose memory is in the store', async () => {
-  assert.deepEqual((await check(description())).result, { passed: true, failures: [] });
+  assert.deepEqual((await check(description())).result.failures, []);
 });
 
 test('passes "No memories used." without calling the engine', async () => {
   const { result, fake } = await check('## Memories used\n\nNo memories used.\n');
-  assert.deepEqual({ passed: result.passed, calls: fake.requests.length }, { passed: true, calls: 0 });
+  assert.deepEqual({ failures: result.failures, calls: fake.requests.length }, { failures: [], calls: 0 });
 });
 
 test('fails a description without the section', async () => {
@@ -85,4 +85,13 @@ test('fails an ambiguous short id', async () => {
   const twin = '59ffd1cd-0000-4000-8000-000000000002';
   const { result } = await check(description(), { searches: { [SEARCH]: [MEMORY, twin] }, memories: [MEMORY, twin] });
   assert.match(result.failures[0], /matches more than one memory/);
+});
+
+test('says plainly that nothing needed checking when no memories were used', async () => {
+  const { result } = await check('## Memories used\n\nNo memories used.\n');
+  assert.equal(result.summary, 'Memories used: the description says no memories were used, so there was nothing to check.');
+});
+
+test('says every citation checked out when rows pass', async () => {
+  assert.equal((await check(description())).result.summary, 'Memories used: all 1 cited memories are in this repository\'s memory store.');
 });
