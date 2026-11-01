@@ -2,24 +2,23 @@
 // for Claude. Only memories cited in "Memories used" are ever scored; a fetched but uncited memory
 // is left untouched, except in a run started by hand for an older pull request with no section.
 //   1. Read the description and commit messages the workflow wrote (PR_FILE), and resolve every citation.
-//   2. A ticked Helped is 1, a ticked Wrong is 0; everything else goes to the judge.
+//   2. A ticked Helped is 1, a ticked Wrong is 0, when someone other than the author, and not a bot,
+//      ticked it (lib/ticks.mjs); everything else goes to the judge.
 //   3. Write prepared.json (everything) and judge-input.json (only what the judge must read).
 // An engine that cannot be asked stops the job: nothing is scored yet, so a re-run is safe.
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createEngine } from './lib/engine.mjs';
-import { readPullRequest } from './lib/pull-request.mjs';
 import { writeGithubOutput } from './lib/github-output.mjs';
+import { readEditHistory, readPullRequest } from './lib/pull-request.mjs';
 import { resolveCitations, retrievedMemories } from './lib/resolve.mjs';
+import { countedTicks } from './lib/ticks.mjs';
 import { readSection, searchIdsIn } from './lib/section.mjs';
 
-const TICKED = {
-  helped: { reward: 1, reason: 'a reviewer ticked Helped' },
-  wrong: { reward: 0, reason: 'a reviewer ticked Wrong' },
-};
+const TICKED = { helped: { reward: 1, label: 'Helped' }, wrong: { reward: 0, label: 'Wrong' } };
 
-export async function prepareJudging({ description, commitMessages, engine, scoreRetrieved = false }) {
+export async function prepareJudging({ description, commitMessages, engine, history = null, scoreRetrieved = false }) {
   const section = readSection(description);
   if (section.state === 'missing' && scoreRetrieved) return prepareRetrieved(searchIdsIn([description, ...commitMessages]), engine);
   if (section.state === 'missing') return nothingToScore('The description has no "Memories used" section, so no memory was scored.');
@@ -27,14 +26,21 @@ export async function prepareJudging({ description, commitMessages, engine, scor
   const searchIds = searchIdsIn([description, ...commitMessages]);
   const { citations, failures } = await resolveCitations({ rows: section.rows, searchIds, engine });
   failIfTemporary(failures);
+  const ticks = countedTicks({ rows: citations.map((citation) => citation.row), history });
   const decided = [];
   const toJudge = [];
+  const ignoredTicks = [];
   for (const { row, memoryId, searchId, memory } of citations) {
     const cited = { memoryId, short: row.memory, searchId };
-    if (row.verdict === null) toJudge.push({ ...cited, says: row.says, decided: row.decided, memory: memoryText(memory) });
-    else decided.push({ ...cited, ...TICKED[row.verdict], by: 'reviewer' });
+    const tick = ticks.get(row.memory);
+    if (tick.ignored) ignoredTicks.push({ short: row.memory, verdict: TICKED[tick.ignored.verdict].label, why: tick.ignored.why });
+    if (tick.verdict === null) toJudge.push({ ...cited, says: row.says, decided: row.decided, memory: memoryText(memory) });
+    else {
+      const { reward, label } = TICKED[tick.verdict];
+      decided.push({ ...cited, reward, reason: `${tick.by} ticked ${label}`, by: 'reviewer' });
+    }
   }
-  return { note: null, decided, toJudge, skipped: failures.map((failure) => failure.message), sectionProblems: section.problems };
+  return { note: null, decided, toJudge, ignoredTicks, skipped: failures.map((failure) => failure.message), sectionProblems: section.problems };
 }
 
 /**
@@ -71,7 +77,8 @@ async function main() {
   const engine = createEngine({ url: process.env.MEMORY_ENGINE_URL, key: process.env.MEMORY_API_KEY });
   // Set only by a run started by hand for an older merged pull request (memory-merge-judge.yml).
   const scoreRetrieved = process.env.SCORE_RETRIEVED_WITHOUT_SECTION === 'true';
-  const prepared = await prepareJudging({ description, commitMessages, engine, scoreRetrieved });
+  const history = readEditHistory(process.env.EDITS_FILE);
+  const prepared = await prepareJudging({ description, commitMessages, engine, history, scoreRetrieved });
   writeFileSync(join(workDir, 'prepared.json'), JSON.stringify(prepared, null, 2));
   writeFileSync(join(workDir, 'judge-input.json'), JSON.stringify({ memories: prepared.toJudge }, null, 2));
   writeGithubOutput('to_judge', prepared.toJudge.length);

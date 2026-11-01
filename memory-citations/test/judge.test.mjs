@@ -37,9 +37,23 @@ function world(overrides = {}) {
   return { fake, engine: createEngine({ url: 'https://engine.test', key: 'test-only', fetchImpl: fake.fetchImpl }) };
 }
 
-async function prepared(description = DESCRIPTION, overrides = {}) {
+const UNTICKED_DESCRIPTION = DESCRIPTION.replaceAll('[x]', '[ ]');
+
+/** The author opened the pull request with no ticks; a reviewer, julian, ticked in the next edit. */
+function reviewerTicked(description) {
+  return {
+    author: 'agent-author',
+    complete: true,
+    edits: [
+      { editor: { login: 'julian', type: 'User' }, body: description },
+      { editor: { login: 'agent-author', type: 'User' }, body: description.replaceAll('[x]', '[ ]') },
+    ],
+  };
+}
+
+async function prepared(description = DESCRIPTION, overrides = {}, history = reviewerTicked(description)) {
   const { fake, engine } = world(overrides);
-  return { fake, engine, prepared: await prepareJudging({ description, commitMessages: [], engine }) };
+  return { fake, engine, prepared: await prepareJudging({ description, commitMessages: [], engine, history }) };
 }
 
 function sentRewards(fake) {
@@ -102,7 +116,7 @@ test('a memory the judge left out is reported unscored', async () => {
 test('the comment lists each memory with its score and reason', async () => {
   const { prepared: p, engine } = await prepared();
   const done = await finishJudging({ prepared: p, judged: { scores: [{ memoryId: UNSURE, reward: 0.7, reason: 'useful background' }] }, engine });
-  assert.match(done.comment, /\| `aaaaaaaa` \| 1 \| a reviewer ticked Helped \|[\s\S]*\| `cccccccc` \| 0.7 \| useful background \|/);
+  assert.match(done.comment, /\| `aaaaaaaa` \| 1 \| julian ticked Helped \|[\s\S]*\| `cccccccc` \| 0.7 \| useful background \|/);
 });
 
 test('a search that already has a review outcome is reported, not scored again', async () => {
@@ -200,7 +214,7 @@ test('a manual run of an old pull request posts its scores as review outcomes', 
 
 test('a manual run still prefers the section when there is one', async () => {
   const { engine } = world();
-  const p = await prepareJudging({ description: DESCRIPTION, commitMessages: [], engine, scoreRetrieved: true });
+  const p = await prepareJudging({ description: DESCRIPTION, commitMessages: [], engine, history: reviewerTicked(DESCRIPTION), scoreRetrieved: true });
   assert.deepEqual(p.toJudge.map((m) => m.memoryId), [UNSURE]);
 });
 
@@ -214,4 +228,24 @@ test('the comment on an old pull request says its memories were retrieved, not c
   const { prepared: p, engine } = await preparedOldStyle(true);
   const done = await finishJudging({ prepared: p, judged: { scores: [] }, engine });
   assert.match(done.comment, /predates the "Memories used" section/);
+});
+
+function authorTicked(description) {
+  return { author: 'agent-author', complete: true, edits: [{ editor: { login: 'agent-author', type: 'User' }, body: description }, { editor: { login: 'agent-author', type: 'User' }, body: UNTICKED_DESCRIPTION }] };
+}
+
+test("the author's tick does not decide: the judge does", async () => {
+  const { prepared: p } = await prepared(DESCRIPTION, {}, authorTicked(DESCRIPTION));
+  assert.deepEqual(p.toJudge.map((m) => m.memoryId).sort(), [HELPED, WRONG, UNSURE].sort());
+});
+
+test("the comment says why the author's tick was not counted", async () => {
+  const { prepared: p, engine } = await prepared(DESCRIPTION, {}, authorTicked(DESCRIPTION));
+  const done = await finishJudging({ prepared: p, judged: { scores: [] }, engine });
+  assert.match(done.comment, /Ticks not counted:\n- memory aaaaaaaa: ticked Helped, but the pull request's author ticked it, so the judge decided/);
+});
+
+test('without an edit history no tick counts', async () => {
+  const { prepared: p } = await prepared(DESCRIPTION, {}, null);
+  assert.equal(p.decided.length, 0);
 });

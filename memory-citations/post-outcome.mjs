@@ -81,6 +81,10 @@ function commentFor({ prepared, scored, unscored, refusedSearches }) {
     ...prepared.skipped,
   ];
   if (notScored.length > 0) lines.push('', 'Not scored:', ...notScored.map((note) => `- ${note}`));
+  const ignoredTicks = prepared.ignoredTicks ?? [];
+  if (ignoredTicks.length > 0) {
+    lines.push('', 'Ticks not counted:', ...ignoredTicks.map((tick) => `- memory ${tick.short}: ticked ${tick.verdict}, but ${tick.why}, so the judge decided`));
+  }
   if (prepared.sectionProblems.length > 0) lines.push('', 'Notes on the section:', ...prepared.sectionProblems.map((note) => `- ${note}`));
   return [...lines, ''].join('\n');
 }

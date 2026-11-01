@@ -19,3 +19,22 @@ test('reads each commit headline with its own body', () => {
 test('reads an empty description as empty text', () => {
   assert.equal(readPullRequest(written({ body: null, commits: [] })).description, '');
 });
+
+test('reads GitHub edit history newest first with each editor and text', async () => {
+  const { readEditHistory } = await import('../lib/pull-request.mjs');
+  const path = written({ data: { repository: { pullRequest: { author: { login: 'a' }, userContentEdits: { totalCount: 2, nodes: [
+    { editor: { login: 'julian', __typename: 'User' }, diff: 'new' }, { editor: { login: 'a', __typename: 'User' }, diff: null }] } } } } });
+  assert.deepEqual(readEditHistory(path), { author: 'a', complete: true, edits: [
+    { editor: { login: 'julian', type: 'User' }, body: 'new' }, { editor: { login: 'a', type: 'User' }, body: null }] });
+});
+
+test('marks the history incomplete when GitHub returned only part of it', async () => {
+  const { readEditHistory } = await import('../lib/pull-request.mjs');
+  const path = written({ data: { repository: { pullRequest: { author: { login: 'a' }, userContentEdits: { totalCount: 101, nodes: [] } } } } });
+  assert.equal(readEditHistory(path).complete, false);
+});
+
+test('a missing or malformed history file reads as no history', async () => {
+  const { readEditHistory } = await import('../lib/pull-request.mjs');
+  assert.deepEqual([readEditHistory(undefined), readEditHistory(written({ errors: ['x'] }))], [null, null]);
+});
