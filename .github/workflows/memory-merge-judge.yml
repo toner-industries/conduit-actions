@@ -80,7 +80,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: toner-industries/conduit-actions
-          ref: d7d3159c749c5fd1c748ee7581de01caa96868f5
+          ref: 3550659319a7dca63f06f20594fd95b5105a25f4
           path: .conduit-actions
           sparse-checkout: memory-citations
 
@@ -146,14 +146,16 @@ jobs:
             Use only memoryIds from judge-input.json. An empty scores list is correct when nothing
             shows whether the memories were right.
 
-      # The judge read untrusted text with Write access; the next step holds the memory key.
-      - name: check the judge changed nothing outside its work folder
+      # The judge read untrusted text with Write access, and the next step runs the pinned scripts with
+      # the memory key: they and this repository's .github must be exactly as checked out. The rest of
+      # the checkout is not checked, because Claude Code's action keeps files of its own there.
+      - name: check the judge left the scripts untouched
         id: judge_integrity
         if: steps.judge.outcome != 'skipped'
         run: |
-          changed="$(git status --porcelain -- . ':!.memory-judge' ':!.conduit-actions'; git -C .conduit-actions status --porcelain)"
+          changed="$(git -C .conduit-actions status --porcelain; git status --porcelain -- .github)"
           if [ -n "$changed" ]; then
-            echo "::error title=Memory judge::the judge changed files outside its work folder; refusing to post scores with the memory key"
+            echo "::error title=Memory judge::the judge changed the scoring scripts or .github; refusing to post scores with the memory key"
             echo "$changed"
             exit 1
           fi
@@ -209,13 +211,13 @@ jobs:
             Source key: "${{ inputs.mining_source || github.event.repository.name }} pr-${{ env.PR }} ${{ steps.today.outputs.value }}".
             Emit the JSON array to ${{ env.WORK_DIR }}/mined.json.
 
-      - name: check the miner changed nothing outside its work folder
+      - name: check the miner left the scripts untouched
         id: mine_integrity
         if: steps.mine.outcome != 'skipped'
         run: |
-          changed="$(git status --porcelain -- . ':!.memory-judge' ':!.conduit-actions' ':!.meml'; git -C .conduit-actions status --porcelain)"
+          changed="$(git -C .conduit-actions status --porcelain; git status --porcelain -- .github)"
           if [ -n "$changed" ]; then
-            echo "::error title=Memory mining::the miner changed files outside its work folder; refusing to ingest with the memory key"
+            echo "::error title=Memory mining::the miner changed the ingest scripts or .github; refusing to ingest with the memory key"
             echo "$changed"
             exit 1
           fi
