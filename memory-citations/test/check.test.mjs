@@ -8,8 +8,11 @@ const SEARCH = '07d47575-5244-424e-94da-81934b76cfc8';
 const MEMORY = '59ffd1cd-0000-4000-8000-000000000001';
 const KEY = 'test-only-key';
 
-function description(rows = [`| \`59ffd1cd\` | Legacy ids are unique | kept ids unique | [ ] Helped [ ] Wrong [ ] Not sure |`], search = SEARCH) {
-  return `## Memories used\n\n| Memory | What it says | What it decided | Reviewer |\n|---|---|---|---|\n${rows.join('\n')}\n\n<!-- meml-retrievals: ${search} -->\n`;
+const HEADER = '| Memory | What it says | What it decided |\n|---|---|---|';
+const OLD_HEADER = '| Memory | What it says | What it decided | Reviewer |\n|---|---|---|---|';
+
+function description(rows = ['| `59ffd1cd` | Legacy ids are unique | kept ids unique |'], header = HEADER) {
+  return `## Memories used\n\n${header}\n${rows.join('\n')}\n\n<!-- meml-retrievals: ${SEARCH} -->\n`;
 }
 
 async function check(text, engineOptions = { searches: { [SEARCH]: [MEMORY] }, memories: [MEMORY] }, commits = []) {
@@ -32,8 +35,18 @@ test('fails a description without the section', async () => {
 });
 
 test('fails a row still to fill in, naming it', async () => {
-  const { result } = await check(description(['| `59ffd1cd` | Legacy ids | (fill in) | [ ] Helped |']));
+  const { result } = await check(description(['| `59ffd1cd` | Legacy ids | (fill in) |']));
   assert.match(result.failures[0], /row 1 \(memory 59ffd1cd\)/);
+});
+
+test('passes a pull request opened with the old Reviewer column', async () => {
+  const row = '| `59ffd1cd` | Legacy ids are unique | kept ids unique | [ ] Helped [ ] Wrong [ ] Not sure |';
+  assert.deepEqual((await check(description([row], OLD_HEADER))).result.failures, []);
+});
+
+test('fails an old row still to fill in', async () => {
+  const row = '| `59ffd1cd` | Legacy ids are unique | (fill in) | [ ] Helped [ ] Wrong [ ] Not sure |';
+  assert.match((await check(description([row], OLD_HEADER))).result.failures[0], /What it decided/);
 });
 
 test('fails rows with no search ids to look them up in', async () => {

@@ -1,6 +1,7 @@
 // The merge judge, second half: posts each search's review outcome and writes the pull request comment.
 //   1. Check the judge's scores: only memories it was asked about, each between 0 and 1.
-//   2. Merge them with the reviewers' ticks (a tick always wins) and send one review outcome per search.
+//   2. Merge them with what reviewers' verdict comments settled (which the judge never sees) and send
+//      one review outcome per search.
 //   3. Write comment.md: every cited memory, its score and the reason, plus anything not scored.
 // A search that already has a review outcome is refused by the engine and reported. Any other engine
 // failure stops the job; a re-run then skips the searches already scored, which the engine refuses.
@@ -66,7 +67,7 @@ function commentFor({ prepared, scored, unscored, refusedSearches }) {
   lines.push(
     prepared.retrievedOnly
       ? 'This pull request predates the "Memories used" section, so every memory its searches returned was judged from the review comments and the diff.'
-      : "How the memories this pull request cites were scored at merge. A reviewer's tick decides; otherwise the judge read what each memory decided, the review comments and the diff.",
+      : 'How the memories this pull request cites were scored at merge. Reviewers who agree decide, with a comment line such as `memory 59ffd1cd: helped` (or `wrong`, or `not sure`); otherwise the judge read what each memory decided, the review comments and the diff.',
     '',
     '| Memory | Score | Reason |',
     '|---|---|---|',
@@ -81,12 +82,18 @@ function commentFor({ prepared, scored, unscored, refusedSearches }) {
     ...prepared.skipped,
   ];
   if (notScored.length > 0) lines.push('', 'Not scored:', ...notScored.map((note) => `- ${note}`));
-  const ignoredTicks = prepared.ignoredTicks ?? [];
-  if (ignoredTicks.length > 0) {
-    lines.push('', 'Ticks not counted:', ...ignoredTicks.map((tick) => `- memory ${tick.short}: ticked ${tick.verdict}, but ${tick.why}, so the judge decided`));
+  if (prepared.disagreements.length > 0) {
+    lines.push('', 'Reviewers disagreed:', ...prepared.disagreements.map(({ short, verdicts }) => `- memory ${short}: ${saidBy(verdicts)}, so the judge decided`));
+  }
+  if (prepared.ignoredVerdicts.length > 0) {
+    lines.push('', 'Verdicts not counted:', ...prepared.ignoredVerdicts.map((ignored) => `- memory ${ignored.memory}: ${saidBy([ignored])}, not counted because ${ignored.why}`));
   }
   if (prepared.sectionProblems.length > 0) lines.push('', 'Notes on the section:', ...prepared.sectionProblems.map((note) => `- ${note}`));
   return [...lines, ''].join('\n');
+}
+
+function saidBy(verdicts) {
+  return verdicts.map(({ by, verdict }) => `${by} said ${verdict}`).join(', ');
 }
 
 async function main() {

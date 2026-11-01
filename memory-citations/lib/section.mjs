@@ -13,12 +13,14 @@ const SEARCH_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/
 // `meml-retrievals:` (one line, many ids) is what cite prints; `meml-retrieval:` markers and
 // `Meml-Retrieval:` commit trailers are the older, one-id forms, still read so no search is lost.
 const SEARCH_MARKER = /meml-retrievals?:((?:\s*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})+)/gi;
-const TICKED = /\[[xX]\]\s*(helped|wrong|not sure)/gi;
-const COLUMNS = 4;
+const COLUMNS = 3;
+// Pull requests opened before verdict comments carry a fourth Reviewer column of tick boxes. It is
+// read past and never as a verdict: nobody can tell who ticked a box (lib/verdicts.mjs).
+const OLD_COLUMNS = 4;
 
 /**
  * @returns {{state: 'missing'} | {state: 'none', problems: string[]} |
- *   {state: 'rows', rows: Array<{number: number, memory: string, says: string, decided: string, verdict: 'helped'|'wrong'|null}>, problems: string[]}}
+ *   {state: 'rows', rows: Array<{number: number, memory: string, says: string, decided: string}>, problems: string[]}}
  */
 export function readSection(description) {
   const lines = sectionLines(description ?? '');
@@ -66,11 +68,11 @@ function isHeaderRow(line) {
 
 function readRow(line, number, problems) {
   const cells = cellsOf(line);
-  if (cells.length !== COLUMNS) {
-    problems.push(`Memories used, row ${number}: a row needs four columns (Memory, What it says, What it decided, Reviewer)`);
+  if (cells.length !== COLUMNS && cells.length !== OLD_COLUMNS) {
+    problems.push(`Memories used, row ${number}: a row needs three columns (Memory, What it says, What it decided)`);
     return null;
   }
-  const [memoryCell, says, decided, reviewer] = cells;
+  const [memoryCell, says, decided] = cells;
   const memory = MEMORY_ID.exec(memoryCell)?.[1];
   if (memory === undefined) {
     problems.push(`Memories used, row ${number}: the Memory column must hold a memory id such as \`59ffd1cd\``);
@@ -79,20 +81,13 @@ function readRow(line, number, problems) {
   if (decided === '' || decided === UNDECIDED) {
     problems.push(`Memories used, row ${number} (memory ${memory}): fill in "What it decided", or remove the row if this memory did not drive a decision`);
   }
-  return { number, memory, says, decided, verdict: verdictOf(reviewer) };
+  return { number, memory, says, decided };
 }
 
 /** Splits on the table's pipes, keeping `\|` inside a cell. */
 function cellsOf(line) {
   const inner = line.trim().replace(/^\|/, '').replace(/\|$/, '');
   return inner.split(/(?<!\\)\|/).map((cell) => cell.trim().replaceAll('\\|', '|'));
-}
-
-/** Exactly one of Helped or Wrong ticked decides; Not sure, none, or several leave it to the judge. */
-function verdictOf(reviewer) {
-  const ticked = [...reviewer.matchAll(TICKED)].map((match) => match[1].toLowerCase());
-  if (ticked.length !== 1 || ticked[0] === 'not sure') return null;
-  return ticked[0];
 }
 
 function repeatedMemories(rows) {
