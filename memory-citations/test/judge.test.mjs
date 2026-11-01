@@ -12,17 +12,17 @@ const WRONG = 'bbbbbbbb-0000-4000-8000-000000000002';
 const UNSURE = 'cccccccc-0000-4000-8000-000000000003';
 const UNCITED = 'dddddddd-0000-4000-8000-000000000004';
 
-function row(id, ticks) {
-  return `| \`${id.slice(0, 8)}\` | says ${id.slice(0, 8)} | decided ${id.slice(0, 8)} | ${ticks} |`;
+function row(id) {
+  return `| \`${id.slice(0, 8)}\` | says ${id.slice(0, 8)} | decided ${id.slice(0, 8)} |`;
 }
 
 const DESCRIPTION = `## Memories used
 
-| Memory | What it says | What it decided | Reviewer |
-|---|---|---|---|
-${row(HELPED, '[x] Helped [ ] Wrong [ ] Not sure')}
-${row(WRONG, '[ ] Helped [x] Wrong [ ] Not sure')}
-${row(UNSURE, '[ ] Helped [ ] Wrong [x] Not sure')}
+| Memory | What it says | What it decided |
+|---|---|---|
+${row(HELPED)}
+${row(WRONG)}
+${row(UNSURE)}
 
 <!-- meml-retrievals: ${FIRST_SEARCH} ${SECOND_SEARCH} -->
 `;
@@ -37,40 +37,39 @@ function world(overrides = {}) {
   return { fake, engine: createEngine({ url: 'https://engine.test', key: 'test-only', fetchImpl: fake.fetchImpl }) };
 }
 
-const UNTICKED_DESCRIPTION = DESCRIPTION.replaceAll('[x]', '[ ]');
+const AUTHOR = 'agent-author';
 
-/** The author opened the pull request with no ticks; a reviewer, julian, ticked in the next edit. */
-function reviewerTicked(description) {
-  return {
-    author: 'agent-author',
-    complete: true,
-    edits: [
-      { editor: { login: 'julian', type: 'User' }, body: description },
-      { editor: { login: 'agent-author', type: 'User' }, body: description.replaceAll('[x]', '[ ]') },
-    ],
-  };
+function comment(body, author = 'julian', createdAt = '2026-10-31T10:00:00Z') {
+  return { author, userType: 'User', createdAt, body };
 }
 
-async function prepared(description = DESCRIPTION, overrides = {}, history = reviewerTicked(description)) {
+function commentsBy(...comments) {
+  return { author: AUTHOR, comments };
+}
+
+/** A reviewer, julian, gave a verdict on each cited memory in one comment. */
+const REVIEWED = commentsBy(comment('Reviewed.\nmemory aaaaaaaa: helped\nmemory bbbbbbbb: wrong\nmemory cccccccc: not sure'));
+
+async function prepared(description = DESCRIPTION, overrides = {}, reviews = REVIEWED) {
   const { fake, engine } = world(overrides);
-  return { fake, engine, prepared: await prepareJudging({ description, commitMessages: [], engine, history }) };
+  return { fake, engine, prepared: await prepareJudging({ description, commitMessages: [], engine, reviews }) };
 }
 
 function sentRewards(fake) {
   return Object.fromEntries(fake.requests.filter((r) => r.path === '/v1/feedback').map((r) => [r.body.retrievalId, r.body.rewards]));
 }
 
-test('a ticked Helped is scored 1 without asking the judge', async () => {
+test("a reviewer's helped is scored 1 without asking the judge", async () => {
   const { prepared: p } = await prepared();
   assert.deepEqual(p.decided.find((d) => d.memoryId === HELPED).reward, 1);
 });
 
-test('a ticked Wrong is scored 0 without asking the judge', async () => {
+test("a reviewer's wrong is scored 0 without asking the judge", async () => {
   const { prepared: p } = await prepared();
   assert.deepEqual(p.decided.find((d) => d.memoryId === WRONG).reward, 0);
 });
 
-test('only an unticked or Not sure memory goes to the judge', async () => {
+test('only a memory no reviewer settled goes to the judge', async () => {
   const { prepared: p } = await prepared();
   assert.deepEqual(p.toJudge.map((m) => m.memoryId), [UNSURE]);
 });
@@ -89,7 +88,7 @@ test('a memory two searches returned is credited once, to the first search liste
   assert.deepEqual(Object.keys(sentRewards(fake)[FIRST_SEARCH]), [HELPED]);
 });
 
-test('ticks win over the judge', async () => {
+test("a reviewer's verdict wins over the judge", async () => {
   const { prepared: p, engine, fake } = await prepared();
   await finishJudging({ prepared: p, judged: { scores: [{ memoryId: UNSURE, reward: 0.7, reason: 'background' }] }, engine });
   assert.deepEqual(sentRewards(fake)[SECOND_SEARCH], { [WRONG]: 0, [UNSURE]: 0.7 });
@@ -116,7 +115,7 @@ test('a memory the judge left out is reported unscored', async () => {
 test('the comment lists each memory with its score and reason', async () => {
   const { prepared: p, engine } = await prepared();
   const done = await finishJudging({ prepared: p, judged: { scores: [{ memoryId: UNSURE, reward: 0.7, reason: 'useful background' }] }, engine });
-  assert.match(done.comment, /\| `aaaaaaaa` \| 1 \| julian ticked Helped \|[\s\S]*\| `cccccccc` \| 0.7 \| useful background \|/);
+  assert.match(done.comment, /\| `aaaaaaaa` \| 1 \| Helped, decided by julian's comment \|[\s\S]*\| `cccccccc` \| 0.7 \| useful background \|/);
 });
 
 test('a search that already has a review outcome is reported, not scored again', async () => {
@@ -214,7 +213,7 @@ test('a manual run of an old pull request posts its scores as review outcomes', 
 
 test('a manual run still prefers the section when there is one', async () => {
   const { engine } = world();
-  const p = await prepareJudging({ description: DESCRIPTION, commitMessages: [], engine, history: reviewerTicked(DESCRIPTION), scoreRetrieved: true });
+  const p = await prepareJudging({ description: DESCRIPTION, commitMessages: [], engine, reviews: REVIEWED, scoreRetrieved: true });
   assert.deepEqual(p.toJudge.map((m) => m.memoryId), [UNSURE]);
 });
 
@@ -230,22 +229,64 @@ test('the comment on an old pull request says its memories were retrieved, not c
   assert.match(done.comment, /predates the "Memories used" section/);
 });
 
-function authorTicked(description) {
-  return { author: 'agent-author', complete: true, edits: [{ editor: { login: 'agent-author', type: 'User' }, body: description }, { editor: { login: 'agent-author', type: 'User' }, body: UNTICKED_DESCRIPTION }] };
-}
+const BY_AUTHOR = commentsBy(comment('memory aaaaaaaa: helped\nmemory bbbbbbbb: wrong', AUTHOR));
 
-test("the author's tick does not decide: the judge does", async () => {
-  const { prepared: p } = await prepared(DESCRIPTION, {}, authorTicked(DESCRIPTION));
+test("the author's verdict does not decide: the judge does", async () => {
+  const { prepared: p } = await prepared(DESCRIPTION, {}, BY_AUTHOR);
   assert.deepEqual(p.toJudge.map((m) => m.memoryId).sort(), [HELPED, WRONG, UNSURE].sort());
 });
 
-test("the comment says why the author's tick was not counted", async () => {
-  const { prepared: p, engine } = await prepared(DESCRIPTION, {}, authorTicked(DESCRIPTION));
+test("the comment says why the author's verdict was not counted", async () => {
+  const { prepared: p, engine } = await prepared(DESCRIPTION, {}, BY_AUTHOR);
   const done = await finishJudging({ prepared: p, judged: { scores: [] }, engine });
-  assert.match(done.comment, /Ticks not counted:\n- memory aaaaaaaa: ticked Helped, but the pull request's author ticked it, so the judge decided/);
+  assert.match(done.comment, /Verdicts not counted:\n- memory aaaaaaaa: agent-author said Helped, not counted because it was written by the pull request's author/);
 });
 
-test('without an edit history no tick counts', async () => {
-  const { prepared: p } = await prepared(DESCRIPTION, {}, null);
+test('with no verdict comments the judge decides every cited memory', async () => {
+  const { prepared: p } = await prepared(DESCRIPTION, {}, commentsBy());
   assert.equal(p.decided.length, 0);
+});
+
+test('a verdict on a memory the pull request does not cite is reported, not scored', async () => {
+  const { prepared: p, engine } = await prepared(DESCRIPTION, {}, commentsBy(comment('memory dddddddd: helped')));
+  const done = await finishJudging({ prepared: p, judged: { scores: [] }, engine });
+  assert.match(done.comment, /- memory dddddddd: julian said Helped, not counted because this pull request does not cite that memory/);
+});
+
+test('reviewers who agree settle the memory together', async () => {
+  const { prepared: p } = await prepared(DESCRIPTION, {}, commentsBy(comment('memory aaaaaaaa: helped'), comment('memory aaaaaaaa: helped', 'maria')));
+  assert.equal(p.decided.find((d) => d.memoryId === HELPED).reason, "Helped, decided by julian's and maria's comments");
+});
+
+const DISAGREED = commentsBy(comment('memory aaaaaaaa: helped'), comment('memory aaaaaaaa: wrong', 'maria'));
+
+test('reviewers who disagree leave the memory to the judge', async () => {
+  const { prepared: p } = await prepared(DESCRIPTION, {}, DISAGREED);
+  assert.deepEqual(p.toJudge.map((m) => m.memoryId).sort(), [HELPED, WRONG, UNSURE].sort());
+});
+
+test('the comment says the reviewers disagreed and names them', async () => {
+  const { prepared: p, engine } = await prepared(DESCRIPTION, {}, DISAGREED);
+  const done = await finishJudging({ prepared: p, judged: { scores: [] }, engine });
+  assert.match(done.comment, /Reviewers disagreed:\n- memory aaaaaaaa: julian said Helped, maria said Wrong, so the judge decided/);
+});
+
+test("a reviewer's later verdict replaces their earlier one", async () => {
+  const changedMind = commentsBy(comment('memory aaaaaaaa: wrong', 'julian', '2026-10-31T12:00:00Z'), comment('memory aaaaaaaa: helped', 'julian', '2026-10-31T09:00:00Z'));
+  const { prepared: p } = await prepared(DESCRIPTION, {}, changedMind);
+  assert.equal(p.decided.find((d) => d.memoryId === HELPED).reward, 0);
+});
+
+test('a tick in an old Reviewer column decides nothing', async () => {
+  const old = DESCRIPTION.replace('| What it decided |\n|---|---|---|', '| What it decided | Reviewer |\n|---|---|---|---|')
+    .replace(`decided aaaaaaaa |`, 'decided aaaaaaaa | [x] Helped [ ] Wrong [ ] Not sure |');
+  const { prepared: p } = await prepared(old, {}, commentsBy());
+  assert.deepEqual(p.toJudge.map((m) => m.memoryId).sort(), [HELPED, WRONG, UNSURE].sort());
+});
+
+test("a manual run of an old pull request takes a reviewer's verdict on a retrieved memory", async () => {
+  const { engine } = world();
+  const reviews = commentsBy(comment('memory dddddddd: helped'));
+  const p = await prepareJudging({ description: OLD_STYLE, commitMessages: [], engine, reviews, scoreRetrieved: true });
+  assert.equal(p.decided.find((d) => d.memoryId === UNCITED).reward, 1);
 });

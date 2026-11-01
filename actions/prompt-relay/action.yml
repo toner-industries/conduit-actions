@@ -49,7 +49,7 @@ runs:
           -H 'content-type: application/json' \
           --data "{\"role\":\"$ROLE\"}")
         if [ "$http_code" != "200" ]; then
-          echo "::error title=prompt-relay::bundle fetch failed (HTTP $http_code) for role '$ROLE' — failing loudly; no review/agent run happened."
+          echo "::error title=prompt-relay::bundle fetch failed (HTTP $http_code) for role '$ROLE': failing loudly; no review/agent run happened."
           exit 1
         fi
         python3 - "$dir" <<'PY'

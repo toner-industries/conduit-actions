@@ -21,10 +21,9 @@ token.
   repository's own memory store. If the memory engine cannot be asked, it
   fails as "could not verify"; re-run it.
 - `.github/workflows/memory-merge-judge.yml`: a reusable workflow that, when a
-  pull request merges, scores each cited memory (a Helped or Wrong tick
-  decides when someone other than the author, and not a bot, set it, as the
-  description's edit history shows; otherwise Claude judges from the decision,
-  the comments and the diff), sends the scores as review outcomes, comments them on the pull
+  pull request merges, scores each cited memory (reviewers' verdict comments
+  decide when they agree; otherwise Claude judges from the decision, the
+  comments and the diff), sends the scores as review outcomes, comments them on the pull
   request, and mines the pull request into new memories.
 - `memory-citations/`: the scripts both workflows run, with their tests
   (`node --test memory-citations/test/`, no network).
@@ -90,15 +89,35 @@ The pull request template section the check reads:
 
 <!-- Paste the output of `recall.py cite` (mech-memory plugin), fill in "What it decided"
 for every row and remove rows that did not drive a decision. If no memory drove a
-decision, replace the table with exactly: No memories used. A Helped or Wrong tick decides a
-memory's score only when someone other than the author, and not a bot, set it. -->
+decision, replace the table with exactly: No memories used. -->
 
-| Memory | What it says | What it decided | Reviewer |
-|---|---|---|---|
-| `59ffd1cd` | Legacy ids must be unique per tenant | (fill in) | [ ] Helped [ ] Wrong [ ] Not sure |
+| Memory | What it says | What it decided |
+|---|---|---|
+| `59ffd1cd` | Legacy ids must be unique per tenant | (fill in) |
 
 <!-- meml-retrievals: <search id> <search id> -->
 ```
+
+The check still passes a table from before verdict comments, with a fourth
+Reviewer column of tick boxes; that column is ignored.
+
+A reviewer decides a cited memory's score with a comment on the pull request
+(a plain comment, a review, or an inline review comment) holding a line of its
+own for each memory:
+
+```text
+memory 59ffd1cd: helped
+memory 7c1e09ab: wrong
+memory 0d4f22e1: not sure
+```
+
+The id is the memory's first eight characters, optionally in backticks; case
+and surrounding spaces do not matter, and other text in the comment is fine.
+A verdict counts only when someone other than the pull request's author, and
+not a bot, wrote it, about a memory the section cites. Each reviewer's latest
+verdict is used. When they all say helped the memory scores 1.0, when they all
+say wrong it scores 0.0; not sure, or reviewers who disagree, leave it to the
+judge, and the scores comment names who decided or who disagreed.
 
 ## Exposure model, stated honestly
 
