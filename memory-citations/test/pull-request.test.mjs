@@ -34,6 +34,13 @@ test('marks the history incomplete when GitHub returned only part of it', async 
   assert.equal(readEditHistory(path).complete, false);
 });
 
+test('reads as no history when GitHub refuses the edits to an app token', async () => {
+  const { readEditHistory } = await import('../lib/pull-request.mjs');
+  const refused = { data: { repository: { pullRequest: { author: { login: 'a' }, userContentEdits: { totalCount: 2, nodes: [null, null] } } } },
+    errors: [{ type: 'FORBIDDEN', message: 'Resource not accessible by integration' }] };
+  assert.equal(readEditHistory(written(refused)), null);
+});
+
 test('a missing or malformed history file reads as no history', async () => {
   const { readEditHistory } = await import('../lib/pull-request.mjs');
   assert.deepEqual([readEditHistory(undefined), readEditHistory(written({ errors: ['x'] }))], [null, null]);

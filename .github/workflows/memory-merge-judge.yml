@@ -114,6 +114,8 @@ jobs:
           mkdir -p "$WORK_DIR"
           gh pr view "$PR" --json body,commits > "$PR_FILE"
           # Who changed the description, and its whole text after each change: decides which ticks count.
+          # GitHub refuses every edit to app tokens, this workflow's included (checked 2026-10-31), so this
+          # fails today; then no tick counts and the judge decides every cited memory (lib/ticks.mjs).
           # $owner, $name and $number below are GraphQL variables, filled by -F, not shell variables.
           # shellcheck disable=SC2016
           gh api graphql -F owner="${GITHUB_REPOSITORY%%/*}" -F name="${GITHUB_REPOSITORY#*/}" -F number="$PR" -f query='
@@ -124,7 +126,8 @@ jobs:
                   userContentEdits(first: 100) { totalCount nodes { editor { login __typename } diff } }
                 }
               }
-            }' > "$EDITS_FILE"
+            }' > "$EDITS_FILE" \
+            || echo "::warning title=TICKS NOT COUNTED::GitHub would not show who edited the description, so no tick can be traced to a reviewer; the judge decides every cited memory."
           gh pr view "$PR" --json title -q .title > "$WORK_DIR/pr-title.txt"
           gh pr view "$PR" --json body -q .body > "$WORK_DIR/pr-body.md"
           gh pr view "$PR" --json commits --jq '.commits[] | .messageHeadline + "\n" + .messageBody' > "$WORK_DIR/commit-messages.txt"
