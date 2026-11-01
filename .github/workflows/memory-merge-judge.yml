@@ -148,7 +148,10 @@ jobs:
 
       - name: settle memories reviewers' verdict comments decide and prepare the rest for the judge
         id: prepare
-        run: node .conduit-actions/memory-citations/judge-input.mjs
+        run: |
+          node .conduit-actions/memory-citations/judge-input.mjs
+          # A step output cannot be rewritten by later steps, so the judge cannot forge this fingerprint.
+          echo "prepared_sha256=$(sha256sum "$WORK_DIR/prepared.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: judge (claude)
         id: judge
@@ -195,8 +198,8 @@ jobs:
             shows whether the memories were right.
 
       # The judge read untrusted text with Write access, and the next step runs the pinned scripts with
-      # the memory key: they and this repository's .github must be exactly as checked out. The rest of
-      # the checkout is not checked, because Claude Code's action keeps files of its own there.
+      # the memory key: they, this repository's .github and prepared.json must be exactly as before the
+      # judge. The rest of the checkout is not checked, because Claude Code's action keeps files there.
       - name: check the judge left the scripts untouched
         id: judge_integrity
         if: steps.judge.outcome != 'skipped'
@@ -207,6 +210,13 @@ jobs:
             echo "$changed"
             exit 1
           fi
+          # prepared.json holds the memories reviewers' comments settled, and the judge could write it.
+          if [ "$(sha256sum "$WORK_DIR/prepared.json" | cut -d' ' -f1)" != "$PREPARED_SHA256" ]; then
+            echo "::error title=Memory judge::the judge changed prepared.json; refusing to post scores with the memory key"
+            exit 1
+          fi
+        env:
+          PREPARED_SHA256: ${{ steps.prepare.outputs.prepared_sha256 }}
 
       - name: post the review outcomes
         id: post
