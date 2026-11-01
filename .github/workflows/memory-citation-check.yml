@@ -1,0 +1,59 @@
+# memory-citation-check: a reusable workflow (workflow_call) that checks a pull request's
+# "Memories used" section. A repository that uses Mech Memory calls it on every opened, updated or
+# edited pull request and makes the check required, so every memory that drove a decision is named
+# before merge. It passes only when:
+#   - the section exists;
+#   - it says exactly "No memories used.", or every row has "What it decided" filled in;
+#   - every cited memory is in this repository's memory store (checked with the repository's key).
+# An engine that cannot be asked fails the check as "could not verify"; re-run it. It never passes
+# unverified.
+#
+# The scripts are checked out from this repository at a pinned commit (memory-citations/). To change
+# them: commit the scripts, then change the `ref:` below to that commit in a second commit.
+#   1. Read the pull request's description and commit messages into a JSON file (never a shell string).
+#   2. Check out the scripts at the pinned commit.
+#   3. Run check.mjs, which prints each problem as an error naming the row to fix.
+name: memory-citation-check
+
+on:
+  workflow_call:
+    inputs:
+      engine_url:
+        description: The memory engine to check against.
+        type: string
+        default: https://meml-engine.mech-briefs.workers.dev
+    secrets:
+      memory_api_key:
+        description: The repository's own memory key (a service key for its store).
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check:
+    name: memory-citations
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: read the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json body,commits > "$RUNNER_TEMP/pr.json"
+
+      - name: check out the citation scripts
+        uses: actions/checkout@v4
+        with:
+          repository: toner-industries/conduit-actions
+          ref: 9213ba8f2b67b053ad7b28487ddacf034b9eb7b2
+          path: .conduit-actions
+          sparse-checkout: memory-citations
+
+      - name: check the Memories used section
+        env:
+          PR_FILE: ${{ runner.temp }}/pr.json
+          MEMORY_ENGINE_URL: ${{ inputs.engine_url }}
+          MEMORY_API_KEY: ${{ secrets.memory_api_key }}
+        run: node .conduit-actions/memory-citations/check.mjs

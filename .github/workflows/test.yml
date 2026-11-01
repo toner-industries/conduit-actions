@@ -1,0 +1,17 @@
+# Runs the memory citation scripts' tests (node --test, no network) on every push and pull request.
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  memory-citations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --test memory-citations/test/
