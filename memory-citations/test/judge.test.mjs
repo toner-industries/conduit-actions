@@ -158,3 +158,60 @@ test('a memory skipped for a lasting reason is listed as not scored', async () =
   const done = await finishJudging({ prepared: p, judged: { scores: [] }, engine });
   assert.match(done.comment, /Not scored:\n- Memories used: memory bbbbbbbb is not in this repository's memory store/);
 });
+
+const OLD_STYLE = `## Summary\nDid things.\n\n<!-- meml-retrieval: ${FIRST_SEARCH} -->\n`;
+
+async function preparedOldStyle(scoreRetrieved, overrides = {}) {
+  const { fake, engine } = world(overrides);
+  const p = await prepareJudging({ description: OLD_STYLE, commitMessages: [`fix\n\nMeml-Retrieval: ${SECOND_SEARCH}`], engine, scoreRetrieved });
+  return { fake, engine, prepared: p };
+}
+
+test('an old pull request with only search markers scores nothing on a normal merge', async () => {
+  const { prepared: p } = await preparedOldStyle(false);
+  assert.match(p.note, /no "Memories used" section/);
+});
+
+test('a manual run sends every retrieved memory of an old pull request to the judge', async () => {
+  const { prepared: p } = await preparedOldStyle(true);
+  assert.deepEqual(p.toJudge.map((m) => m.memoryId).sort(), [HELPED, UNCITED, WRONG, UNSURE].sort());
+});
+
+test('a manual run credits a memory two searches returned to the first search only', async () => {
+  const { prepared: p } = await preparedOldStyle(true);
+  assert.equal(p.toJudge.find((m) => m.memoryId === HELPED).searchId, FIRST_SEARCH);
+});
+
+test('a manual run marks old-style memories as retrieved, not cited', async () => {
+  const { prepared: p } = await preparedOldStyle(true);
+  assert.deepEqual([...new Set(p.toJudge.map((m) => m.decided))], [null]);
+});
+
+test('a manual run skips a retrieved memory the store no longer holds', async () => {
+  const { prepared: p } = await preparedOldStyle(true, { memories: [HELPED, WRONG, UNSURE] });
+  assert.match(p.skipped.join('\n'), /memory dddddddd is not in this repository's memory store/);
+});
+
+test('a manual run of an old pull request posts its scores as review outcomes', async () => {
+  const { prepared: p, engine, fake } = await preparedOldStyle(true);
+  await finishJudging({ prepared: p, judged: { scores: [{ memoryId: UNCITED, reward: 1, reason: 'used' }] }, engine });
+  assert.deepEqual(sentRewards(fake), { [FIRST_SEARCH]: { [UNCITED]: 1 } });
+});
+
+test('a manual run still prefers the section when there is one', async () => {
+  const { engine } = world();
+  const p = await prepareJudging({ description: DESCRIPTION, commitMessages: [], engine, scoreRetrieved: true });
+  assert.deepEqual(p.toJudge.map((m) => m.memoryId), [UNSURE]);
+});
+
+test('an old pull request with no markers at all scores nothing, even on a manual run', async () => {
+  const { engine } = world();
+  const p = await prepareJudging({ description: 'no markers', commitMessages: [], engine, scoreRetrieved: true });
+  assert.match(p.note, /no search ids/);
+});
+
+test('the comment on an old pull request says its memories were retrieved, not cited', async () => {
+  const { prepared: p, engine } = await preparedOldStyle(true);
+  const done = await finishJudging({ prepared: p, judged: { scores: [] }, engine });
+  assert.match(done.comment, /predates the "Memories used" section/);
+});

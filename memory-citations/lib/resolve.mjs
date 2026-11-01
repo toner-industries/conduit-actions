@@ -28,6 +28,33 @@ export async function resolveCitations({ rows, searchIds, engine }) {
   return { citations, failures };
 }
 
+/**
+ * Every memory the searches returned, each once, credited to the first search listed that returned it.
+ * Only for an older pull request scored by hand: it has search markers but no "Memories used" section.
+ */
+export async function retrievedMemories({ searchIds, engine }) {
+  const searches = [];
+  const failures = [];
+  for (const id of searchIds) {
+    const answer = await engine.search(id);
+    if (answer.status === 200 && Array.isArray(answer.body?.memoryIds)) searches.push({ id, memoryIds: answer.body.memoryIds });
+    else failures.push(searchFailure(id, answer.status));
+  }
+  const memories = [];
+  const seen = new Set();
+  for (const search of searches) {
+    for (const memoryId of search.memoryIds.filter((id) => !seen.has(id))) {
+      seen.add(memoryId);
+      const answer = await engine.memory(memoryId);
+      const short = memoryId.slice(0, SHORT_ID);
+      if (answer.status === 200) memories.push({ memoryId, short, searchId: search.id, memory: answer.body });
+      else if (answer.status === NOT_FOUND) failures.push(lasting(`Memories used: memory ${short} is not in this repository's memory store; check which key your session used`));
+      else failures.push(couldNotVerify(answer.status));
+    }
+  }
+  return { memories, failures };
+}
+
 async function searchesFound(searchIds, engine) {
   const searches = [];
   const failures = [];

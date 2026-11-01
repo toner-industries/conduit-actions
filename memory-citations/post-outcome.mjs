@@ -64,7 +64,9 @@ function commentFor({ prepared, scored, unscored, refusedSearches }) {
   const lines = [COMMENT_MARKER, '### Memory scores', ''];
   if (prepared.note) return [...lines, prepared.note, ''].join('\n');
   lines.push(
-    "How the memories this pull request cites were scored at merge. A reviewer's tick decides; otherwise the judge read what each memory decided, the review comments and the diff.",
+    prepared.retrievedOnly
+      ? 'This pull request predates the "Memories used" section, so every memory its searches returned was judged from the review comments and the diff.'
+      : "How the memories this pull request cites were scored at merge. A reviewer's tick decides; otherwise the judge read what each memory decided, the review comments and the diff.",
     '',
     '| Memory | Score | Reason |',
     '|---|---|---|',
