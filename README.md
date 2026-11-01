@@ -46,19 +46,25 @@ name: memory-citations
 on:
   pull_request:
     types: [opened, synchronize, edited, reopened, closed]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: A merged pull request to score by hand (scores only, never mines)
+        required: true
 permissions:
   contents: read
   pull-requests: write
 jobs:
   check:
-    if: github.event.action != 'closed'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
     uses: toner-industries/conduit-actions/.github/workflows/memory-citation-check.yml@<commit>
     secrets:
       memory_api_key: ${{ secrets.MEMORY_API_KEY }}
   judge:
-    if: github.event.action == 'closed' && github.event.pull_request.merged
+    if: github.event_name == 'workflow_dispatch' || (github.event.action == 'closed' && github.event.pull_request.merged)
     uses: toner-industries/conduit-actions/.github/workflows/memory-merge-judge.yml@<commit>
     with:
+      pull_request: ${{ inputs.pull_request }}
       mining_source: sms-harness
     secrets:
       memory_api_key: ${{ secrets.MEMORY_API_KEY }}
@@ -66,6 +72,11 @@ jobs:
       mech_discovery_app_id: ${{ secrets.MECH_DISCOVERY_APP_ID }}
       mech_discovery_app_private_key: ${{ secrets.MECH_DISCOVERY_APP_PRIVATE_KEY }}
 ```
+
+Run by hand (Actions, memory-citations, Run workflow, with a pull request number), the judge scores
+one merged pull request and never mines it, so a pull request mined before is not mined twice. A
+pull request from before citations, with search markers but no "Memories used" section, then has
+every memory its searches returned judged; a normal merge never does that.
 
 Pin both by commit, not by tag. Each workflow checks out `memory-citations/`
 at a pinned commit of its own: to change the scripts, commit them, then point
